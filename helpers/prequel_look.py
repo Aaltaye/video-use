@@ -15,6 +15,7 @@ Usage:
     python helpers/prequel_look.py <input> -o <output>            # exact match
     python helpers/prequel_look.py <input> -o <output> --dream    # + dreamy old-TV texture
     python helpers/prequel_look.py in.mp4 -o out.mp4 --glow 0.8 --no-frame
+    python helpers/prequel_look.py raw_folder/ -o done_folder/      # batch: every video/image in a folder
 
 Works on videos and still images. The frame mask is stretched to the output size,
 so it is exact for 9:16 vertical video (what it was traced from).
@@ -28,12 +29,15 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-LOOK_DIR = Path(__file__).resolve().parent.parent / "static" / "looks"
+# Assets sit next to this script in the portable preset folder, or in static/looks/ in the repo.
+_HERE = Path(__file__).resolve().parent
+LOOK_DIR = _HERE if (_HERE / "prequel.cube").exists() else _HERE.parent / "static" / "looks"
 LUT = LOOK_DIR / "prequel.cube"
 MASK = LOOK_DIR / "prequel_mask.png"
 META = json.loads((LOOK_DIR / "prequel.json").read_text())
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
 
 
 def probe_size(path: Path) -> tuple[int, int]:
@@ -123,13 +127,23 @@ def apply(inp: Path, out: Path, glow: float, frame: bool, dream: bool) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="PREQUEL look: fitted LUT + glow + rounded black frame")
-    ap.add_argument("input", type=Path)
-    ap.add_argument("-o", "--output", type=Path, required=True)
+    ap.add_argument("input", type=Path, help="Video/image file, or a folder of them")
+    ap.add_argument("-o", "--output", type=Path, required=True, help="Output file, or output folder when input is a folder")
     ap.add_argument("--glow", type=float, default=META["glow"],
                     help=f"Haze/bloom strength 0..1 (default {META['glow']}, what the LUT was fitted with)")
     ap.add_argument("--dream", action="store_true", help="Add dreamy old-TV texture: halation, RGB fringe, scanlines, grain")
     ap.add_argument("--no-frame", action="store_true", help="Skip the rounded black frame")
     args = ap.parse_args()
+    if args.input.is_dir():
+        files = sorted(p for p in args.input.iterdir() if p.suffix.lower() in VIDEO_EXTS | IMAGE_EXTS)
+        if not files:
+            raise SystemExit(f"no videos or images found in {args.input}")
+        for i, f in enumerate(files, 1):
+            out = args.output / f"{f.stem}_prequel{f.suffix if f.suffix.lower() in IMAGE_EXTS else '.mp4'}"
+            print(f"[{i}/{len(files)}] {f.name} -> {out.name}")
+            apply(f, out, args.glow, not args.no_frame, args.dream)
+        print(f"done: {len(files)} file(s) in {args.output}")
+        return
     apply(args.input, args.output, args.glow, not args.no_frame, args.dream)
     print(f"done: {args.output}")
 
