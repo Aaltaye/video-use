@@ -1,0 +1,11 @@
+{
+  "scale": 0.956,
+  "glow": 0.6,
+  "sigma": 0.012,
+  "frame": true,
+  "fit_size": [
+    1290,
+    2796
+  ],
+  "mean_abs_error": 13.17
+}

@@ -71,7 +71,8 @@ The skill lives in `video-use/`. User footage lives wherever they put it. All se
 - **`timeline_view.py <video> <start> <end>`** — filmstrip + waveform PNG. On-demand visual drill-down. **Not a scan tool** — use it at decision points, not constantly.
 - **`render.py <edl.json> -o <out>`** — per-segment extract → concat → overlays (PTS-shifted) → subtitles LAST. `--preview` for 720p fast. `--build-subtitles` to generate master.srt inline.
 - **`grade.py <in> -o <out>`** — ffmpeg filter chain grade. Presets + `--filter '<raw>'` for custom.
-- **`prequel_look.py <in> -o <out>`** — the user's PREQUEL look recreated: warm amber vintage grade + haze/glow + rounded black "arch window" frame. Works on videos and stills. `--glow 0..1`, `--no-frame`, `--print-grade` (colour-only chain for `grade.py --filter`). Apply to the final render (the frame is full-canvas).
+- **`prequel_look.py <in> -o <out>`** — the user's PREQUEL look: colour LUT + frame traced exactly from their before/after pair (`static/looks/prequel.*`), plus haze/glow and the rounded black "arch window" frame. `--dream` adds dreamy old-TV texture (halation, RGB fringe, scanlines, grain). `--glow 0..1`, `--no-frame`. Videos and stills. Apply to the final render (the frame is full-canvas).
+- **`fit_look.py <before> <after> --name <n> [--glow g] [--frame]`** — fit a new look from any app's before/after screenshots → `static/looks/<n>.cube` (+ `_mask.png`). Use it when the user wants to copy another preset.
 
 For animations, create `<edit>/animations/slot_<id>/` with `Bash` and spawn a sub-agent via the `Agent` tool.
 

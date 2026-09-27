@@ -1,59 +1,43 @@
-"""Recreate the user's PREQUEL look: warm orange vintage grade + haze/glow + rounded black frame.
+"""Recreate the user's PREQUEL look: fitted colour LUT + haze/glow + rounded black frame.
 
-Reverse-engineered from a before/after pair (vertical 9:16 clip). Three stages:
+Everything is fitted from a before/after pair by `fit_look.py` and lives in
+static/looks/ (prequel.cube, prequel_mask.png, prequel.json):
 
-  1. Grade  — crushed blacks, amber/orange midtones, blue pulled from highlights
-              (shadows keep some blue so night windows still read), +saturation.
-  2. Glow   — blurred copy screen-blended over the grade: bloom on highlights
-              plus a light haze that lifts the midtones.
-  3. Frame  — everything outside a rounded "arch window" is solid black.
-              The window spans ~2%–98% of width and ~22%–78% of height.
+  1. Shrink — PREQUEL zooms the picture out slightly (~4%) inside the frame.
+  2. Colour — 3D LUT fitted pixel-for-pixel from the pair.
+  3. Glow   — blurred copy screen-blended on top (bloom + haze).
+  4. Frame  — the exact window traced from the after image; black outside.
 
-Works on videos and still images (use a stills first to dial it in).
+`--dream` adds an old-TV-in-a-dream layer on top of the match: soft halation,
+RGB fringing, fine scanlines and moving film grain.
 
 Usage:
-    python helpers/prequel_look.py <input> -o <output>
-    python helpers/prequel_look.py in.mp4 -o out.mp4 --glow 0.4 --no-frame
-    python helpers/prequel_look.py --print-grade          # grade chain only, for grade.py --filter
+    python helpers/prequel_look.py <input> -o <output>            # exact match
+    python helpers/prequel_look.py <input> -o <output> --dream    # + dreamy old-TV texture
+    python helpers/prequel_look.py in.mp4 -o out.mp4 --glow 0.8 --no-frame
+
+Works on videos and still images. The frame mask is stretched to the output size,
+so it is exact for 9:16 vertical video (what it was traced from).
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import tempfile
 from pathlib import Path
 
+LOOK_DIR = Path(__file__).resolve().parent.parent / "static" / "looks"
+LUT = LOOK_DIR / "prequel.cube"
+MASK = LOOK_DIR / "prequel_mask.png"
+META = json.loads((LOOK_DIR / "prequel.json").read_text())
+
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
-
-# Stage 1 — colour. eq adds the punch (runs in YUV, so it goes first), per-channel
-# curves warm the whole image, then selectivecolor pushes whites/neutrals/skin to
-# amber while keeping blues blue (night windows stay blue, like the original).
-GRADE = (
-    "eq=saturation=1.1:contrast=1.06,"
-    "curves="
-    "r='0/0 0.12/0.07 0.45/0.62 0.8/0.96 1/1':"
-    "g='0/0 0.12/0.06 0.45/0.48 0.8/0.86 1/0.97':"
-    "b='0/0.02 0.3/0.29 0.6/0.52 1/0.82',"
-    "selectivecolor=correction_method=absolute:"
-    "whites='0 0.03 0.3 0':"
-    "neutrals='-0.05 0.04 0.3 0':"
-    "yellows='-0.1 0.08 0.25 0':"
-    "reds='0 0.08 0.2 0':"
-    "blues='0.15 0 -0.2 0'"
-)
-
-# Stage 3 — frame geometry, as fractions of the output frame.
-FRAME_LEFT, FRAME_RIGHT = 0.022, 0.978
-FRAME_TOP, FRAME_BOTTOM = 0.222, 0.778
-FRAME_RX, FRAME_RY = 0.34, 0.14  # elliptical corner radii, fraction of frame width / height
 
 
 def probe_size(path: Path) -> tuple[int, int]:
-    out = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-i", str(path)],
-        capture_output=True, text=True,
-    ).stderr
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(path)], capture_output=True, text=True).stderr
     for line in out.splitlines():
         if "Video:" in line:
             for tok in line.replace(",", " ").split():
@@ -63,55 +47,71 @@ def probe_size(path: Path) -> tuple[int, int]:
     raise SystemExit(f"could not read video size of {path}")
 
 
-def make_mask(w: int, h: int, out: Path) -> None:
-    """Write a grayscale PNG: white inside the rounded window, black outside, 2px feather."""
-    cx = w / 2
-    cy = h * (FRAME_TOP + FRAME_BOTTOM) / 2
-    rx, ry = w * FRAME_RX, h * FRAME_RY
-    a = w * (FRAME_RIGHT - FRAME_LEFT) / 2 - rx  # half-width of the straight part
-    b = h * (FRAME_BOTTOM - FRAME_TOP) / 2 - ry  # half-height of the straight part
-    # Normalised distance to the corner ellipse, rescaled to ~pixels for the feather.
-    dist = f"(hypot(max(abs(X-{cx})-{a},0)/{rx},max(abs(Y-{cy})-{b},0)/{ry})-1)*{min(rx, ry)}"
-    expr = f"255*clip(0.5-{dist}/2,0,1)"
+def make_scanlines(w: int, h: int, out: Path) -> None:
+    """Static scanline texture: soft dark line every ~1/540 of the height."""
+    period = max(3, round(h / 540))
     subprocess.run(
         ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-         "-f", "lavfi", "-i", f"color=black:s={w}x{h}:d=1",
-         "-vf", f"format=gray,geq=lum='{expr}'", "-frames:v", "1", str(out)],
+         "-f", "lavfi", "-i", f"color=white:s={w}x{h}:d=1",
+         "-vf", f"format=gray,geq=lum='255-70*pow(sin(PI*Y/{period}),8)'",
+         "-frames:v", "1", str(out)],
         check=True,
     )
 
 
-def build_graph(w: int, h: int, glow: float, frame: bool) -> str:
-    sigma = max(w, h) * 0.018
-    graph = (
-        f"[0:v]{GRADE},format=gbrp,split[base][hi];"
+def build_graph(w: int, h: int, glow: float, frame: bool, dream: bool) -> tuple[str, str]:
+    s = META["scale"]
+    sw, sh = round(w * s / 2) * 2, round(h * s / 2) * 2
+    sigma = META["sigma"] * h
+    lut = str(LUT).replace("\\", "/").replace(":", "\\:")
+    g = (
+        f"[0:v]scale={sw}:{sh},pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,"
+        f"format=gbrp,lut3d=file='{lut}':interp=tetrahedral,split[base][hi];"
         f"[hi]gblur=sigma={sigma:.1f}[blur];"
         f"[base][blur]blend=all_mode=screen:all_opacity={glow}[graded]"
     )
-    if frame:
-        graph += (
-            f";[1:v]format=gbrp,scale={w}:{h}[mask];"
-            f"color=black:s={w}x{h},format=gbrp[black];"
-            f"[black][graded][mask]maskedmerge=planes=7[framed]"
+    last = "[graded]"
+    if dream:
+        px = max(1, round(w / 540))  # fringe size scales with resolution
+        g += (
+            # halation: wide warm bloom
+            f";{last}split[d0][d1];"
+            f"[d1]gblur=sigma={h * 0.04:.1f},colorchannelmixer=rr=1:gg=0.75:bb=0.45[hal];"
+            f"[d0][hal]blend=all_mode=screen:all_opacity=0.28,"
+            # RGB fringing + grain
+            f"rgbashift=rh=-{px}:bh={px},noise=alls=9:allf=t+u[tex];"
+            # scanlines (input 2)
+            f"[2:v]format=gbrp,scale={w}:{h}[scan];"
+            f"[tex][scan]blend=all_mode=multiply:all_opacity=0.5[dreamy]"
         )
-    return graph
+        last = "[dreamy]"
+    if frame:
+        g += (
+            f";[1:v]format=gbrp,scale={w}:{h}:flags=bicubic[mask];"
+            f"color=black:s={w}x{h},format=gbrp[black];"
+            f"[black]{last}[mask]maskedmerge=planes=7[framed]"
+        )
+        last = "[framed]"
+    return g, last
 
 
-def apply(inp: Path, out: Path, glow: float, frame: bool) -> None:
+def apply(inp: Path, out: Path, glow: float, frame: bool, dream: bool) -> None:
     w, h = probe_size(inp)
     is_image = inp.suffix.lower() in IMAGE_EXTS
+    loop = [] if is_image else ["-loop", "1"]
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
         cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(inp)]
-        if frame:
-            mask = Path(tmp) / "mask.png"
-            make_mask(w, h, mask)
-            cmd += ([] if is_image else ["-loop", "1"]) + ["-i", str(mask)]
-        graph = build_graph(w, h, glow, frame)
-        last = "[framed]" if frame else "[graded]"
+        # input 1 is always the mask (unused when --no-frame), input 2 the scanlines
+        cmd += loop + ["-i", str(MASK)]
+        if dream:
+            scan = Path(tmp) / "scan.png"
+            make_scanlines(w, h, scan)
+            cmd += loop + ["-i", str(scan)]
+        graph, last = build_graph(w, h, glow, frame, dream)
         cmd += ["-filter_complex", graph, "-map", last]
         if is_image:
-            cmd += ["-frames:v", "1"]
+            cmd += ["-frames:v", "1", "-update", "1"]
         else:
             cmd += [
                 "-map", "0:a?", "-shortest",
@@ -122,20 +122,15 @@ def apply(inp: Path, out: Path, glow: float, frame: bool) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="PREQUEL-style warm glow + rounded black frame")
-    ap.add_argument("input", type=Path, nargs="?")
-    ap.add_argument("-o", "--output", type=Path)
-    ap.add_argument("--glow", type=float, default=0.75, help="Haze/bloom strength 0..1 (default 0.75)")
+    ap = argparse.ArgumentParser(description="PREQUEL look: fitted LUT + glow + rounded black frame")
+    ap.add_argument("input", type=Path)
+    ap.add_argument("-o", "--output", type=Path, required=True)
+    ap.add_argument("--glow", type=float, default=META["glow"],
+                    help=f"Haze/bloom strength 0..1 (default {META['glow']}, what the LUT was fitted with)")
+    ap.add_argument("--dream", action="store_true", help="Add dreamy old-TV texture: halation, RGB fringe, scanlines, grain")
     ap.add_argument("--no-frame", action="store_true", help="Skip the rounded black frame")
-    ap.add_argument("--print-grade", action="store_true", help="Print the colour-only filter chain and exit")
     args = ap.parse_args()
-
-    if args.print_grade:
-        print(GRADE)
-        return
-    if not args.input or not args.output:
-        ap.error("input and -o/--output are required")
-    apply(args.input, args.output, args.glow, not args.no_frame)
+    apply(args.input, args.output, args.glow, not args.no_frame, args.dream)
     print(f"done: {args.output}")
 
 
