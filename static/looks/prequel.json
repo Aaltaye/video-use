@@ -10,9 +10,9 @@
   "glow": [
     {
       "opacity": 1.0,
-      "sigma": 28.0
+      "sigma": 40
     }
   ],
-  "fitted_from": "lm07-cave before/after video, 60 frame pairs, offset 2.6 s",
-  "mean_abs_error_inside": 18.46
+  "fitted_from": "lm07-cave before/after video: 60 content-matched frame pairs",
+  "mean_abs_error_inside": 15.75
 }
