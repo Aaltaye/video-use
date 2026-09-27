@@ -9,6 +9,7 @@ dependencies = [
     "matplotlib",
     "pillow",
     "numpy",
+    "scipy",
 ]
 
 [project.optional-dependencies]

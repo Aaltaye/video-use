@@ -1,0 +1,18 @@
+{
+  "canvas": [
+    1080,
+    1920
+  ],
+  "box": [
+    1050,
+    1400
+  ],
+  "glow": [
+    {
+      "opacity": 1.0,
+      "sigma": 40
+    }
+  ],
+  "fitted_from": "lm07-cave before/after video: 60 content-matched frame pairs",
+  "mean_abs_error_inside": 15.75
+}
